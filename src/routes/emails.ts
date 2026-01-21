@@ -12,15 +12,47 @@ router.post("/send", async (req, res) => {
     return res.status(400).json({ error: "Invalid payload" });
   }
 
+  // Phase 1: Pre-check usage (soft gate)
+  const billingMonth = new Date();
+  billingMonth.setDate(1); // First day of current month
+  const monthStr = billingMonth.toISOString().split('T')[0]; // YYYY-MM-DD
+
+  const usageResult = await db.query(
+    `SELECT COUNT(*) as sent_count FROM email_usage WHERE account_id = $1 AND month = $2`,
+    [accountId, monthStr]
+  );
+
+  const sentCount = parseInt(usageResult.rows[0].sent_count);
+
+  const accountResult = await db.query(
+    `SELECT monthly_limit FROM accounts WHERE id = $1`,
+    [accountId]
+  );
+
+  if (accountResult.rows.length === 0) {
+    return res.status(401).json({ error: "Account not found" });
+  }
+
+  const { monthly_limit } = accountResult.rows[0];
+
+  if (sentCount >= monthly_limit) {
+    const resetDate = new Date(billingMonth);
+    resetDate.setMonth(resetDate.getMonth() + 1);
+    return res.status(429).json({
+      error: "Monthly limit exceeded",
+      reset_date: resetDate.toISOString().split('T')[0]
+    });
+  }
+
   try {
     const result = await db.query(
       `
       INSERT INTO emails
-      (account_id, idempotency_key, to_email, subject, status)
-      VALUES ($1, $2, $3, $4, 'pending')
+      (account_id, idempotency_key, to_email, from_email, subject, html, text, status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
       RETURNING id
       `,
-      [accountId, idempotency_key, to, subject]
+      [accountId, idempotency_key, to, from || '', subject, html || '', text || '']
     );
 
     const emailId = result.rows[0].id;

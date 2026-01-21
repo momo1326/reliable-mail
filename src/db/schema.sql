@@ -4,6 +4,7 @@
 CREATE TABLE IF NOT EXISTS accounts (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
+    monthly_limit INTEGER DEFAULT 1000,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -28,6 +29,20 @@ CREATE TABLE IF NOT EXISTS emails (
     html TEXT,
     text TEXT,
     status VARCHAR(50) DEFAULT 'pending',
+    provider_message_id VARCHAR(255),
+    sent_at TIMESTAMP,
+    attempts INTEGER DEFAULT 0,
+    last_error TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(account_id, idempotency_key)
+);
+
+-- Email Usage table (append-only for billing)
+CREATE TABLE IF NOT EXISTS email_usage (
+    id BIGSERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    email_id INTEGER NOT NULL REFERENCES emails(id),
+    month DATE NOT NULL, -- first day of month
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(email_id)
 );
