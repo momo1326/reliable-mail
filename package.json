@@ -6,7 +6,7 @@
   "main": "src/server.ts",
   "scripts": {
     "start": "node dist/server.js",
-    "dev": "node --loader ts-node/esm src/server.ts",
+    "dev": "ts-node src/server.ts",
     "build": "tsc"
   },
   "dependencies": {
