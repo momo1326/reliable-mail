@@ -5,8 +5,12 @@ CREATE TABLE IF NOT EXISTS accounts (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     monthly_limit INTEGER DEFAULT 1000,
+    webhook_url TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE accounts
+ADD COLUMN IF NOT EXISTS webhook_url TEXT;
 
 -- API Keys table
 CREATE TABLE IF NOT EXISTS api_keys (

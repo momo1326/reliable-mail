@@ -28,6 +28,62 @@ const redisConfig = {
   port: config.REDIS_PORT,
 };
 
+const WEBHOOK_RETRY_DELAYS_MS = [1000, 2000, 4000];
+const WEBHOOK_TIMEOUT_MS = 5000;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function postWebhook(url: string, payload: any) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Webhook responded ${response.status}`);
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function sendWebhookWithRetry(url: string, payload: any) {
+  for (let attempt = 0; attempt <= WEBHOOK_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      await postWebhook(url, payload);
+      return;
+    } catch (err) {
+      if (attempt >= WEBHOOK_RETRY_DELAYS_MS.length) {
+        throw err;
+      }
+
+      await sleep(WEBHOOK_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+
+async function notifyWebhook(accountId: number, payload: any) {
+  const result = await db.query(
+    `SELECT webhook_url FROM accounts WHERE id = $1`,
+    [accountId]
+  );
+
+  const webhookUrl = result.rows[0]?.webhook_url as string | null | undefined;
+  if (!webhookUrl) {
+    return;
+  }
+
+  await sendWebhookWithRetry(webhookUrl, payload);
+}
+
 /**
  * Email queue with exponential backoff.
  * Uses Redis/BullMQ for durability and retry logic.
@@ -122,6 +178,27 @@ new Worker(
         [email.account_id, emailId, messageId]
       );
 
+      try {
+        await notifyWebhook(email.account_id, {
+          event: "email.sent",
+          data: {
+            email_id: emailId,
+            account_id: email.account_id,
+            to: email.to_email,
+            from: email.from_email,
+            subject: email.subject,
+            status: "sent",
+            provider_message_id: messageId,
+            sent_at: new Date().toISOString(),
+          },
+        });
+      } catch (err: any) {
+        console.warn(
+          `[Worker] Webhook failed for email ${emailId}:`,
+          err?.message || err
+        );
+      }
+
       console.log(
         `[Worker] ✅ Email ${emailId} sent successfully (${messageId})`
       );
@@ -142,81 +219,34 @@ new Worker(
         [emailId, attempts, terminal ? "failed" : "retrying", err.message]
       );
 
+      if (terminal) {
+        try {
+          await notifyWebhook(email.account_id, {
+            event: "email.failed",
+            data: {
+              email_id: emailId,
+              account_id: email.account_id,
+              to: email.to_email,
+              from: email.from_email,
+              subject: email.subject,
+              status: "failed",
+              attempts,
+              last_error: err.message,
+            },
+          });
+        } catch (webhookErr: any) {
+          console.warn(
+            `[Worker] Webhook failed for email ${emailId}:`,
+            webhookErr?.message || webhookErr
+          );
+        }
+      }
+
       // Re-throw for BullMQ to retry
       throw err;
     }
   },
   {
     connection: redisConfig,
-  }
-);
-
-new Worker(
-  "emails",
-  async (job: Job) => {
-    const { emailId } = job.data;
-
-    // Claim job atomically
-    const result = await db.query(
-      `
-      UPDATE emails
-      SET status = 'processing'
-      WHERE id = $1 AND status IN ('pending', 'retrying')
-      RETURNING *
-      `,
-      [emailId]
-    );
-
-    if (result.rowCount === 0) return;
-
-    const email = result.rows[0];
-
-    try {
-      const resp = await resend.emails.send({
-        from: email.from_email,
-        to: email.to_email,
-        subject: email.subject,
-        html: email.html,
-        text: email.text,
-      });
-
-      const messageId = (resp as any).id;
-
-      await db.query(
-        `
-        BEGIN;
-        INSERT INTO email_usage (account_id, email_id, month)
-        VALUES ($1, $2, date_trunc('month', now())::date)
-        ON CONFLICT DO NOTHING;
-
-        UPDATE emails
-        SET status = 'sent',
-            provider_message_id = $3,
-            sent_at = now()
-        WHERE id = $2;
-        COMMIT;
-        `,
-        [email.account_id, email.id, messageId]
-      );
-    } catch (err: any) {
-      const attempts = email.attempts + 1;
-      const terminal = attempts >= 5;
-
-      await db.query(
-        `
-        UPDATE emails
-        SET attempts = attempts + 1,
-            status = $2,
-            last_error = $3
-        WHERE id = $1
-        `,
-        [email.id, terminal ? "failed" : "retrying", err.message]
-      );
-
-      throw err;
-    }
-  },
-  {
-    connection: { host: "redis", port: 6379 }
   }
 );

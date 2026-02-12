@@ -124,4 +124,64 @@ router.post("/send", async (req, res) => {
   }
 });
 
+/**
+ * GET /emails/:id
+ * Fetch email status and metadata for authenticated account
+ */
+router.get("/:id", async (req, res) => {
+  const accountId = (req as any).account.accountId;
+  const emailId = Number(req.params.id);
+
+  if (!Number.isInteger(emailId) || emailId <= 0) {
+    return res.status(400).json({ error: "Invalid email id" });
+  }
+
+  try {
+    const result = await db.query(
+      `
+      SELECT
+        id,
+        to_email,
+        from_email,
+        subject,
+        html,
+        text,
+        status,
+        attempts,
+        last_error,
+        provider_message_id,
+        sent_at,
+        created_at
+      FROM emails
+      WHERE id = $1 AND account_id = $2
+      `,
+      [emailId, accountId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Email not found" });
+    }
+
+    const email = result.rows[0];
+
+    return res.json({
+      id: email.id,
+      to: email.to_email,
+      from: email.from_email,
+      subject: email.subject,
+      html: email.html,
+      text: email.text,
+      status: email.status,
+      attempts: email.attempts,
+      last_error: email.last_error,
+      provider_message_id: email.provider_message_id,
+      sent_at: email.sent_at,
+      created_at: email.created_at,
+    });
+  } catch (err) {
+    console.error("Email fetch error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 export default router;

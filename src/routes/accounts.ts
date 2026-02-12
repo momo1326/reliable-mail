@@ -21,16 +21,27 @@ const router = Router();
  * No auth required (bootstrapping)
  */
 router.post("/register", async (req, res) => {
-  const { account_name, monthly_limit } = req.body;
+  const { account_name, monthly_limit, webhook_url } = req.body;
 
   if (!account_name || account_name.length < 3) {
     return res.status(400).json({ error: "account_name required (min 3 chars)" });
   }
 
+  if (webhook_url) {
+    try {
+      const parsed = new URL(webhook_url);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return res.status(400).json({ error: "webhook_url must be http or https" });
+      }
+    } catch {
+      return res.status(400).json({ error: "Invalid webhook_url" });
+    }
+  }
+
   try {
     const accountResult = await db.query(
-      `INSERT INTO accounts (name, monthly_limit) VALUES ($1, $2) RETURNING id`,
-      [account_name, monthly_limit || 1000]
+      `INSERT INTO accounts (name, monthly_limit, webhook_url) VALUES ($1, $2, $3) RETURNING id`,
+      [account_name, monthly_limit || 1000, webhook_url || null]
     );
 
     const accountId = accountResult.rows[0].id;
