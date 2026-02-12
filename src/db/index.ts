@@ -1,3 +1,14 @@
+/**
+ * Database Connection Pool
+ * 
+ * Manages PostgreSQL connections and exposes db.query() for all database operations.
+ * Schema includes:
+ * - accounts: billing and metadata
+ * - api_keys: authentication (bcrypt-hashed)
+ * - emails: email records with status tracking
+ * - email_usage: append-only billing ledger (safe for audits and refunds)
+ */
+
 import { Pool } from "pg";
 
 const pool = new Pool({

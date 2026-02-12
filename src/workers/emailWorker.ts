@@ -1,3 +1,21 @@
+/**
+ * Email Worker — Process email tasks with guaranteed delivery.
+ * 
+ * This worker ensures:
+ * - Exactly-once delivery (idempotent job processing)
+ * - Automatic retries with exponential backoff (up to 5 attempts)
+ * - Append-only billing (usage counted only on provider success)
+ * - Atomic transactions (no partial state)
+ * 
+ * Flow:
+ * 1. BullMQ claims job atomically (status = 'processing')
+ * 2. Send email via Resend
+ * 3. On success: insert email_usage (billing), mark status = 'sent'
+ * 4. On failure: retry up to 5 times, then mark status = 'failed'
+ * 
+ * The ON CONFLICT DO NOTHING clause prevents double-charging on retries.
+ */
+
 import { Queue, Worker, Job } from "bullmq";
 import { Resend } from "resend";
 import { db } from "../db/index.js";

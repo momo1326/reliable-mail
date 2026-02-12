@@ -1,3 +1,15 @@
+/**
+ * Email Routes — POST /emails/send
+ * 
+ * Handles sending emails with idempotency, usage enforcement, and async processing.
+ * 
+ * Guarantees:
+ * - Idempotency: Same idempotency_key never creates duplicate emails
+ * - Hard limit: Rejects if account exceeds monthly limit
+ * - Async: Returns 202 immediately, email sent in background
+ * - Usage accounting: Only charged after provider accepts (Phase 2 in worker)
+ */
+
 import { Router } from "express";
 import { db } from "../db/index.js";
 import { enqueueEmail } from "../workers/emailWorker.js";
