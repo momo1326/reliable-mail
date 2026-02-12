@@ -12,6 +12,7 @@
  * 
  * TODO: Optimize with key prefix indexing + Redis cache
  * Current O(n) complexity is fine for MVP (<100 customers).
+ * Production optimization: store key_prefix, query by prefix, cache in Redis.
  */
 
 import { Request, Response, NextFunction } from "express";
@@ -27,34 +28,40 @@ export async function apiKeyAuth(
 
   if (!header || !header.startsWith("Bearer ")) {
     return res.status(401).json({
-      error: "API key missing"
+      error: "API key missing",
+      hint: "Use: Authorization: Bearer sk_live_xxx",
     });
   }
 
   const rawKey = header.replace("Bearer ", "").trim();
 
-  // Fast reject
+  // Fast reject: key must start with sk_live_
   if (!rawKey.startsWith("sk_live_")) {
-    return res.status(401).json({ error: "Invalid API key" });
+    return res.status(401).json({ error: "Invalid API key format" });
   }
 
-  // Fetch candidate keys (prefix optimization later)
-  const keys = await db.query(
-    `SELECT * FROM api_keys WHERE is_active = true`
-  );
+  // Fetch candidate keys (O(n) for now, optimize later)
+  try {
+    const keysResult = await db.query(
+      `SELECT id, account_id, key_hash, rate_limit_per_minute FROM api_keys WHERE is_active = true`
+    );
 
-  for (const key of keys.rows) {
-    const match = await bcrypt.compare(rawKey, key.key_hash);
-    if (match) {
-      // Attach tenant context
-      req.account = {
-        accountId: key.account_id,
-        apiKeyId: key.id,
-        rateLimit: key.rate_limit_per_minute
-      };
-      return next();
+    for (const keyRecord of keysResult.rows) {
+      const match = await bcrypt.compare(rawKey, keyRecord.key_hash);
+      if (match) {
+        // Attach account context
+        (req as any).account = {
+          accountId: keyRecord.account_id,
+          apiKeyId: keyRecord.id,
+          rateLimit: keyRecord.rate_limit_per_minute,
+        };
+        return next();
+      }
     }
-  }
 
-  return res.status(401).json({ error: "Invalid API key" });
+    return res.status(401).json({ error: "Invalid API key" });
+  } catch (err) {
+    console.error("API key auth error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 }
